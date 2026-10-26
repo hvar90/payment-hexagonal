@@ -50,5 +50,20 @@ public class GlobalExceptionHandler {
         
         return Mono.just(errorResponse);
     }
+
+    @ExceptionHandler(MalformedWebhookPayloadException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Mono<ErrorResponseDTO> handleMalformedWebhookPayloadException(MalformedWebhookPayloadException ex) {
+        log.warn("Payload de webhook malformado o inválido: {}", ex.getMessage());
+        
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO(
+                HttpStatus.BAD_REQUEST.value(),
+                "MALFORMED_WEBHOOK_PAYLOAD",
+                "El formato del JSON recibido no es válido.",
+                LocalDateTime.now()
+        );
+        
+        return Mono.just(errorResponse);
+    }
 }
 

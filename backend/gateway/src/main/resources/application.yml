@@ -29,6 +29,12 @@ spring:
     username: guest
     password: guest
 
+# Configuración personalizada de la pasarela de pagos y seguridad de webhooks
+payment:
+  gateway:
+    webhook:
+      secret-key: "llave_secreta_compartida_con_la_pasarela"
+
 logging:
   level:
     root: INFO
