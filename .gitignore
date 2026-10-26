@@ -1,0 +1,43 @@
+# ==========================================
+# GENERAL / OS FILES
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+
+# ==========================================
+# IDE & EDITORS (VS Code & IntelliJ)
+# ==========================================
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.project
+.classpath
+.settings/
+
+# ==========================================
+# BACKEND (Spring Boot / Maven / Java) - Universal Paths
+# ==========================================
+**/target/
+**/.mvn/support/
+*.class
+*.log
+**/src/main/resources/application-local.yml
+
+# ==========================================
+# FRONTEND (Angular / Node.js) - Universal Paths
+# ==========================================
+**/node_modules/
+**/dist/
+**/.angular/
+**/out-tsc/
+*.log
