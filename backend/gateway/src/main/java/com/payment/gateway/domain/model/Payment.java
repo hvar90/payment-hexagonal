@@ -11,7 +11,6 @@ public class Payment {
     private String description;
     private LocalDateTime createdAt;
 
-    // Constructor, getters, setters y lógica de negocio pura
     public Payment(String id, BigDecimal amount, String currency, String description) {
         this.id = id;
         this.amount = amount;
@@ -27,6 +26,11 @@ public class Payment {
 
     public void reject() {
         this.status = PaymentStatus.REJECTED;
+    }
+
+    // <-- Agrega este método para permitir actualizar el estado (ideal para persistencia y webhooks)
+    public void updateStatus(PaymentStatus status) {
+        this.status = status;
     }
 
     // Getters
