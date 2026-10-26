@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import com.payment.gateway.infrastructure.adapter.outbound.gateway.dto.ExternalPaymentResponseDTO;
 
 @Slf4j
 @Component
@@ -50,13 +51,3 @@ public class ExternalPaymentGatewayAdapter implements ExternalPaymentGatewayPort
     }
 }
 
-class ExternalPaymentResponseDTO {
-    private String transactionId;
-    private String status;
-
-    public String getTransactionId() { return transactionId; }
-    public void setTransactionId(String transactionId) { this.transactionId = transactionId; }
-    
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
-}

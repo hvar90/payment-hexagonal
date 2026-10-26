@@ -1,8 +1,6 @@
 package com.payment.gateway.infrastructure.adapter.inbound.rest.exception;
 
 import com.payment.gateway.domain.exception.InvalidPaymentStateException;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -54,14 +52,3 @@ public class GlobalExceptionHandler {
     }
 }
 
-/**
- * DTO estándar para estructurar las respuestas de error de la API.
- */
-@Getter
-@AllArgsConstructor
-class ErrorResponseDTO {
-    private int status;
-    private String errorCode;
-    private String message;
-    private LocalDateTime timestamp;
-}

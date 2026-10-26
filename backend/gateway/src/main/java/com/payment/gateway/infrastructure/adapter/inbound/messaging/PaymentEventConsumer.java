@@ -12,6 +12,6 @@ public class PaymentEventConsumer {
     @RabbitListener(queues = RabbitMQConfig.PAYMENT_QUEUE)
     public void consumePaymentEvent(String message) {
         log.info("Mensaje recibido de RabbitMQ para procesamiento asíncrono: {}", message);
-        // Aquí puedes agregar lógica adicional de negocio (ej. notificaciones, auditoría, conciliación)
+        // Aquí se puede agregar lógica adicional de negocio (ej. notificaciones, auditoría, conciliación)
     }
 }
