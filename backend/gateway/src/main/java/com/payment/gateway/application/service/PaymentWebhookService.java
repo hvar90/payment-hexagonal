@@ -5,10 +5,12 @@ import org.springframework.stereotype.Service;
 import com.payment.gateway.domain.model.Payment;
 import com.payment.gateway.domain.model.PaymentStatus;
 import com.payment.gateway.domain.port.outbound.PaymentRepositoryPort;
+import com.payment.gateway.infrastructure.adapter.outbound.messaging.PaymentEventProducer;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 @Slf4j
 @Service
@@ -16,6 +18,7 @@ import reactor.core.publisher.Mono;
 public class PaymentWebhookService {
 
     private final PaymentRepositoryPort paymentRepositoryPort;
+    private final PaymentEventProducer paymentEventProducer;
 
     public Mono<Payment> handleWebhookNotification(String paymentId, PaymentStatus newStatus) {
         log.info("Recibiendo notificación webhook para el pago ID: {} con nuevo estado: {}", paymentId, newStatus);
@@ -29,7 +32,7 @@ public class PaymentWebhookService {
                         return Mono.just(payment);
                     }
 
-                    // Actualizar estado según la regla de negocio
+                    // Actualizar estado según la regla de negocio (Esto puede lanzar InvalidPaymentStateException)
                     if (newStatus == PaymentStatus.APPROVED) {
                         payment.approve();
                     } else if (newStatus == PaymentStatus.REJECTED) {
@@ -37,6 +40,12 @@ public class PaymentWebhookService {
                     }
 
                     return paymentRepositoryPort.save(payment);
-                });
+                })
+                // Emitir evento a RabbitMQ de forma no bloqueante protegiendo el event loop
+                .flatMap(result -> 
+                    Mono.fromRunnable(() -> paymentEventProducer.sendPaymentEvent(result.getId(), result.getStatus().name()))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .thenReturn(result)
+                );
     }
 }
