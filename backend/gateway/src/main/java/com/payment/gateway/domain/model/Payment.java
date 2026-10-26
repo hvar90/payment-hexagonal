@@ -21,16 +21,33 @@ public class Payment {
     }
 
     public void approve() {
+        if (this.status == PaymentStatus.APPROVED) {
+            return; // Ya está aprobado (Idempotencia a nivel de dominio)
+        }
+        if (this.status == PaymentStatus.REJECTED || this.status == PaymentStatus.FAILED) {
+            throw new IllegalStateException("No se puede aprobar un pago que ya se encuentra en estado: " + this.status);
+        }
         this.status = PaymentStatus.APPROVED;
     }
 
     public void reject() {
+        if (this.status == PaymentStatus.REJECTED) {
+            return; // Ya está rechazado (Idempotencia a nivel de dominio)
+        }
+        if (this.status == PaymentStatus.APPROVED) {
+            throw new IllegalStateException("No se puede rechazar un pago que ya ha sido aprobado.");
+        }
         this.status = PaymentStatus.REJECTED;
     }
 
-  
     public void updateStatus(PaymentStatus status) {
-        this.status = status;
+        if (status == PaymentStatus.APPROVED) {
+            approve();
+        } else if (status == PaymentStatus.REJECTED) {
+            reject();
+        } else {
+            this.status = status;
+        }
     }
 
     // Getters
