@@ -3,6 +3,8 @@ package com.payment.gateway.domain.model;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+import com.payment.gateway.domain.exception.InvalidPaymentStateException;
+
 public class Payment {
     private String id;
     private BigDecimal amount;
@@ -25,7 +27,7 @@ public class Payment {
             return; // Ya está aprobado (Idempotencia a nivel de dominio)
         }
         if (this.status == PaymentStatus.REJECTED || this.status == PaymentStatus.FAILED) {
-            throw new IllegalStateException("No se puede aprobar un pago que ya se encuentra en estado: " + this.status);
+            throw new InvalidPaymentStateException("No se puede aprobar un pago que ya se encuentra en estado: " + this.status);
         }
         this.status = PaymentStatus.APPROVED;
     }
@@ -35,7 +37,7 @@ public class Payment {
             return; // Ya está rechazado (Idempotencia a nivel de dominio)
         }
         if (this.status == PaymentStatus.APPROVED) {
-            throw new IllegalStateException("No se puede rechazar un pago que ya ha sido aprobado.");
+            throw new InvalidPaymentStateException("No se puede rechazar un pago que ya ha sido aprobado.");
         }
         this.status = PaymentStatus.REJECTED;
     }
