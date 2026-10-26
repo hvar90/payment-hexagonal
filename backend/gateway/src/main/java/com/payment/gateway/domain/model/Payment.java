@@ -28,7 +28,7 @@ public class Payment {
         this.status = PaymentStatus.REJECTED;
     }
 
-    // <-- Agrega este método para permitir actualizar el estado (ideal para persistencia y webhooks)
+  
     public void updateStatus(PaymentStatus status) {
         this.status = status;
     }

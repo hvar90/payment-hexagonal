@@ -2,6 +2,10 @@ package com.payment.gateway.infrastructure.adapter.outbound.gateway;
 
 import com.payment.gateway.domain.model.Payment;
 import com.payment.gateway.domain.port.outbound.ExternalPaymentGatewayPort;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
+import io.github.resilience4j.reactor.retry.RetryOperator;
+import io.github.resilience4j.retry.RetryRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -14,6 +18,8 @@ import reactor.core.publisher.Mono;
 public class ExternalPaymentGatewayAdapter implements ExternalPaymentGatewayPort {
 
     private final WebClient paymentGatewayWebClient;
+    private final CircuitBreakerRegistry circuitBreakerRegistry;
+    private final RetryRegistry retryRegistry;
 
     @Override
     public Mono<Payment> charge(Payment payment) {
@@ -25,7 +31,6 @@ public class ExternalPaymentGatewayAdapter implements ExternalPaymentGatewayPort
                 .retrieve()
                 .bodyToMono(ExternalPaymentResponseDTO.class)
                 .map(response -> {
-                    // Traducir la respuesta del proveedor externo a las reglas de negocio del dominio
                     if ("APPROVED".equalsIgnoreCase(response.getStatus())) {
                         payment.approve();
                         log.info("Pago ID: {} aprobado por la pasarela externa", payment.getId());
@@ -35,15 +40,16 @@ public class ExternalPaymentGatewayAdapter implements ExternalPaymentGatewayPort
                     }
                     return payment;
                 })
+                // Aplica Circuit Breaker y Retry de forma reactiva y no bloqueante
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreakerRegistry.circuitBreaker("paymentService")))
+                .transformDeferred(RetryOperator.of(retryRegistry.retry("paymentService")))
                 .onErrorResume(error -> {
-                    log.error("Error de comunicación con la pasarela externa para el pago ID {}: {}", payment.getId(), error.getMessage());
-                    // En caso de caída del proveedor o timeout, propagamos un error controlado
-                    return Mono.error(new RuntimeException("Falla en el servicio de la pasarela externa", error));
+                    log.error("EJECUCIÓN DE FALLBACK: Falla con la pasarela externa para el pago ID {}: {}", payment.getId(), error.getMessage());
+                    return Mono.error(new RuntimeException("La pasarela de pagos externa no se encuentra disponible temporalmente.", error));
                 });
     }
 }
 
-// DTO interno para mapear la respuesta de la pasarela de pagos
 class ExternalPaymentResponseDTO {
     private String transactionId;
     private String status;
