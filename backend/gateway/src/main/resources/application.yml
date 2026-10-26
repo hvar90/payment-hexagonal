@@ -1,0 +1,36 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: payment-gateway-service
+
+  # Configuración de R2DBC (Runtime Reactivo no bloqueante)
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5432/payment_gateway_db
+    username: postgres
+    password: secretpassword
+
+  # Configuración JDBC exclusiva para Flyway (Migraciones DDL al iniciar)
+  datasource:
+    url: jdbc:postgresql://localhost:5432/payment_gateway_db
+    username: postgres
+    password: secretpassword
+    driver-class-name: org.postgresql.Driver
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  # Configuración de RabbitMQ para procesamiento asíncrono de webhooks y eventos
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+logging:
+  level:
+    root: INFO
+    org.springframework.r2dbc: DEBUG
+    com.payment.gateway: DEBUG
