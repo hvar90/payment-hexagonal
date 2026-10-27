@@ -7,15 +7,15 @@ spring:
 
   # Configuración de R2DBC (Runtime Reactivo no bloqueante)
   r2dbc:
-    url: r2dbc:postgresql://localhost:5432/payment_gateway_db
-    username: postgres
-    password: secretpassword
+    url: r2dbc:postgresql://${DB_HOST:localhost}:5432/payment_gateway_db
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:secretpassword}
 
   # Configuración JDBC exclusiva para Flyway (Migraciones DDL al iniciar)
   datasource:
-    url: jdbc:postgresql://localhost:5432/payment_gateway_db
-    username: postgres
-    password: secretpassword
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/payment_gateway_db
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:secretpassword}
     driver-class-name: org.postgresql.Driver
 
   flyway:
@@ -24,16 +24,16 @@ spring:
 
   # Configuración de RabbitMQ para procesamiento asíncrono de webhooks y eventos
   rabbitmq:
-    host: localhost
+    host: ${RABBITMQ_HOST:localhost}
     port: 5672
-    username: guest
-    password: guest
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
 
 # Configuración personalizada de la pasarela de pagos y seguridad de webhooks
 payment:
   gateway:
     webhook:
-      secret-key: "llave_secreta_compartida_con_la_pasarela"
+      secret-key: ${PAYMENT_WEBHOOK_SECRET:llave_secreta_compartida_con_la_pasarela}
 
 # ==========================================
 # Configuración de Resiliencia (Resilience4j)
