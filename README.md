@@ -1,6 +1,5 @@
 # Documentación Técnica: Solución Integración Asíncrona con Pasarela de Pagos (`payment-gateway-service`)
 
-
 ---
 
 ## 1. Declaración de Herramientas Utilizadas y Supuestos Realizados
@@ -9,9 +8,8 @@
 
 * **Java / Spring Boot 3+ (Spring WebFlux):** Desarrollo del runtime reactivo no bloqueante.
 * **Spring Data R2DBC / PostgreSQL 15:** Persistencia reactiva con driver asíncrono sobre PostgreSQL.
-* **Flyway:** Gestión de migraciones de estructura DDL de base de datos en el arranque .
 * **Resilience4j:** Implementación de las estrategias reactivas de *Circuit Breaker* y *Retry* con *Exponential Backoff*.
-* **RabbitMQ:** Broker de mensajería orientada a eventos (*Event-Driven Architecture*) para garantizar procesamiento asíncrono desacoplado y resiliencia ante caídas de subsistemas downstream.
+* **RabbitMQ:** Broker de mensajería orientada a eventos (*Event-Driven Architecture*) para garantizar que ningún mensaje se pierda si los servicios encargados de procesarlos sufren una caída temporal.
 * **HmacSHA256:** Mecanismo criptográfico para firma e integridad de notificaciones tipo Webhook.
 * **Mermaid.js:** Formato unificado para la representación legible de diagramas C4, Modelo Entidad-Relación y Diagramas de Secuencia.
 
@@ -391,7 +389,6 @@ sequenceDiagram
 |---|---|---|
 | **Runtime y framework** | Java / Spring Boot 3+ (Spring WebFlux) | Permite construir una arquitectura reactiva y no bloqueante sobre Netty. Es adecuado para aplicaciones de pasarelas de pago que manejan múltiples conexiones concurrentes y operaciones de I/O de red, como las llamadas a pasarelas externas. Puede reducir la necesidad de hilos en espera frente a un modelo tradicional bloqueante, siempre que se utilicen componentes no bloqueantes de extremo a extremo. |
 | **Persistencia asíncrona** | Spring Data R2DBC / PostgreSQL 15 | R2DBC proporciona acceso reactivo y no bloqueante a PostgreSQL. Evita que las consultas a la base de datos bloqueen los hilos que gestionan el flujo reactivo, manteniendo la reactividad desde el controlador hasta la persistencia. |
-| **Migraciones de base de datos** | Flyway | Permite versionar y controlar los cambios del esquema de la base de datos, incluidas tablas, restricciones e índices únicos o compuestos. Puede ejecutar las migraciones automáticamente durante el arranque de la aplicación mediante JDBC, sin requerir que las operaciones de negocio utilicen JDBC. |
 | **Resiliencia y tolerancia a fallos** | Resilience4j | Proporciona mecanismos como Circuit Breaker y Retry, con integración para Reactor mediante operadores como `CircuitBreakerOperator` y `RetryOperator`. Permite aislar fallos temporales de la pasarela externa y configurar reintentos con *exponential backoff*. Los reintentos deben limitarse a operaciones que puedan repetirse de forma segura, utilizando idempotencia para evitar cobros duplicados. |
 | **Broker de mensajería** | RabbitMQ | Implementa un modelo de mensajería asíncrona que desacopla los componentes mediante eventos. Con una configuración adecuada de colas durables, mensajes persistentes y confirmaciones de publicación y consumo, permite implementar una estrategia de entrega *At-Least-Once*. Los consumidores deben ser idempotentes para gestionar posibles entregas duplicadas y recuperarse de fallos temporales. |
 | **Seguridad e integridad** | HMAC-SHA256 | Permite verificar la autenticidad e integridad de los webhooks mediante una firma calculada con una clave secreta compartida. La aplicación compara la firma recibida con la calculada sobre el contenido de la solicitud, siguiendo el mecanismo definido por la pasarela. Para evitar ataques de repetición, también debe validar la marca de tiempo o el identificador del evento cuando el proveedor lo admita. |
