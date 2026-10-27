@@ -35,6 +35,34 @@ payment:
     webhook:
       secret-key: "llave_secreta_compartida_con_la_pasarela"
 
+# ==========================================
+# Configuración de Resiliencia (Resilience4j)
+# ==========================================
+resilience4j:
+  retry:
+    instances:
+      paymentService:
+        maxAttempts: 3                          # Intenta un máximo de 3 veces (1 llamada inicial + 2 reintentos)
+        waitDuration: 2s                        # Espera 2 segundos entre cada reintento
+        enableExponentialBackoff: true          # Incrementa progresivamente el tiempo de espera para no saturar a la pasarela de pagos
+        exponentialBackoffMultiplier: 2         # El tiempo se duplica en cada intento (ej. 2s, luego 4s)
+        retryExceptions:
+          - java.util.concurrent.TimeoutException
+          - org.springframework.web.reactive.function.client.WebClientResponseException$ServiceUnavailable
+          - org.springframework.web.reactive.function.client.WebClientResponseException$GatewayTimeout
+          - java.io.IOException
+
+  circuitbreaker:
+    instances:
+      paymentService:
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10                   # Evalúa las últimas 10 peticiones
+        failureRateThreshold: 50.0              # Si el 50% o más fallan, el circuito se abre
+        slowCallRateThreshold: 50.0             # Si el 50% son lentas, también cuenta
+        slowCallDurationThreshold: 3s           # Considera una llamada lenta si tarda más de 3 segundos
+        waitDurationInOpenState: 10s            # Tiempo que el circuito permanece abierto antes de probar de nuevo (HALF-OPEN)
+        permittedNumberOfCallsInHalfOpenState: 3
+
 logging:
   level:
     root: INFO
