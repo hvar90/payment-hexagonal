@@ -29,6 +29,7 @@ public class PaymentController {
 
         Payment payment = new Payment(
                 request.getId(),
+                request.getReference(),
                 request.getAmount(),
                 request.getCurrency(),
                 request.getDescription()

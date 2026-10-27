@@ -5,10 +5,38 @@ import com.payment.gateway.domain.model.PaymentStatus;
 public class WebhookRequestDTO {
     private String eventId;
     private String paymentId;
+    private String eventType; // Nuevo campo requerido por la base de datos
     private PaymentStatus status;
-    
-    // Getters
-    public String getEventId() { return eventId; }
-    public String getPaymentId() { return paymentId; }
-    public PaymentStatus getStatus() { return status; }
+
+    public String getEventId() {
+        return eventId;
+    }
+
+    public void setEventId(String eventId) {
+        this.eventId = eventId;
+    }
+
+    public String getPaymentId() {
+        return paymentId;
+    }
+
+    public void setPaymentId(String paymentId) {
+        this.paymentId = paymentId;
+    }
+
+    public String getEventType() {
+        return eventType;
+    }
+
+    public void setEventType(String eventType) {
+        this.eventType = eventType;
+    }
+
+    public PaymentStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(PaymentStatus status) {
+        this.status = status;
+    }
 }
