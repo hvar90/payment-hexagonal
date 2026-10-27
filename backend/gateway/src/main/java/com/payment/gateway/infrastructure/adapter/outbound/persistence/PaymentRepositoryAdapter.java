@@ -25,6 +25,12 @@ public class PaymentRepositoryAdapter implements PaymentRepositoryPort {
         return repository.findById(id).map(this::toDomain);
     }
 
+    @Override
+    public Mono<Payment> findByReference(String reference) {
+        // Busca en la base de datos y mapea el resultado a un objeto de Dominio
+        return repository.findByReference(reference).map(this::toDomain);
+    }
+
     private PaymentEntity toEntity(Payment payment) {
         PaymentEntity entity = new PaymentEntity();
         entity.setId(payment.getId());

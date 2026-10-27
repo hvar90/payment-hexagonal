@@ -5,7 +5,9 @@ import com.payment.gateway.domain.model.PaymentStatus;
 public class WebhookRequestDTO {
     private String eventId;
     private String paymentId;
-    private String eventType; // Nuevo campo requerido por la base de datos
+    //transaction.updated, payment.created, charge.failed
+    private String eventType; 
+    //PENDING, APPROVED, REJECTED
     private PaymentStatus status;
 
     public String getEventId() {

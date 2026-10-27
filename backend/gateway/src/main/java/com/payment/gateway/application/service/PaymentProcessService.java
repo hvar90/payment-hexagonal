@@ -22,21 +22,24 @@ public class PaymentProcessService implements ProcessPaymentUseCase {
 
     @Override
     public Mono<Payment> processPayment(Payment payment) {
-        log.info("Iniciando procesamiento asíncrono para el pago ID: {}", payment.getId());
+        log.info("Iniciando procesamiento para la referencia de comercio: {}", payment.getReference());
 
-        // 1. Guardar inicialmente en estado PENDING
-        return paymentRepositoryPort.save(payment)
-                // 2. Invocar de forma no bloqueante a la pasarela externa
-                .flatMap(savedPayment -> externalPaymentGatewayPort.charge(savedPayment))
-                // 3. Actualizar el estado final resultante en la base de datos
-                .flatMap(processedPayment -> paymentRepositoryPort.save(processedPayment))
-                // 4. Emitir el evento a RabbitMQ de forma no bloqueante protegiendo el event loop
-                .flatMap(result -> 
-                    Mono.fromRunnable(() -> paymentEventProducer.sendPaymentEvent(result.getId(), result.getStatus().name()))
-                        .subscribeOn(Schedulers.boundedElastic())
-                        .thenReturn(result)
-                )
-                .doOnSuccess(result -> log.info("Pago procesado exitosamente con estado: {}", result.getStatus()))
-                .doOnError(error -> log.error("Error crítico procesando el pago ID {}: {}", payment.getId(), error.getMessage()));
+        // 1. Validar si ya existe un pago previo con la misma reference del comercio
+        return paymentRepositoryPort.findByReference(payment.getReference())
+                .flatMap(existingPayment -> {
+                    log.warn("Intento de pago duplicado detectado para la referencia: {}. Retornando pago existente.", payment.getReference());
+                    return Mono.just(existingPayment);
+                })
+                .switchIfEmpty(
+                    // 2. Si no existe, se procede con el flujo normal de creación y cobro
+                    paymentRepositoryPort.save(payment)
+                        .flatMap(savedPayment -> externalPaymentGatewayPort.charge(savedPayment))
+                        .flatMap(processedPayment -> paymentRepositoryPort.save(processedPayment))
+                        .flatMap(result -> 
+                            Mono.fromRunnable(() -> paymentEventProducer.sendPaymentEvent(result.getId(), result.getStatus().name()))
+                                .subscribeOn(Schedulers.boundedElastic())
+                                .thenReturn(result)
+                        )
+                );
     }
 }
