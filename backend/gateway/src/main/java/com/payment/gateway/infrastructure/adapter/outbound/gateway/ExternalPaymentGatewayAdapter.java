@@ -31,17 +31,7 @@ public class ExternalPaymentGatewayAdapter implements ExternalPaymentGatewayPort
                 .bodyValue(payment)
                 .retrieve()
                 .bodyToMono(ExternalPaymentResponseDTO.class)
-                .map(response -> {
-                    if ("APPROVED".equalsIgnoreCase(response.getStatus())) {
-                        payment.approve();
-                        log.info("Pago ID: {} aprobado por la pasarela externa", payment.getId());
-                    } else {
-                        payment.reject();
-                        log.warn("Pago ID: {} rechazado por la pasarela externa", payment.getId());
-                    }
-                    return payment;
-                })
-                // Aplica Circuit Breaker y Retry de forma reactiva y no bloqueante
+                .map(response -> updatePaymentStatusFromResponse(payment, response))
                 .transformDeferred(CircuitBreakerOperator.of(circuitBreakerRegistry.circuitBreaker("paymentService")))
                 .transformDeferred(RetryOperator.of(retryRegistry.retry("paymentService")))
                 .onErrorResume(error -> {
@@ -49,5 +39,32 @@ public class ExternalPaymentGatewayAdapter implements ExternalPaymentGatewayPort
                     return Mono.error(new RuntimeException("La pasarela de pagos externa no se encuentra disponible temporalmente.", error));
                 });
     }
-}
 
+    @Override
+    public Mono<Payment> checkStatus(Payment payment) {
+        log.info("Consultando estado actual en la pasarela externa para la referencia: {}", payment.getReference());
+
+        return paymentGatewayWebClient.get()
+                .uri("/charges/{reference}", payment.getReference())
+                .retrieve()
+                .bodyToMono(ExternalPaymentResponseDTO.class)
+                .map(response -> updatePaymentStatusFromResponse(payment, response))
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreakerRegistry.circuitBreaker("paymentService")))
+                .transformDeferred(RetryOperator.of(retryRegistry.retry("paymentService")))
+                .onErrorResume(error -> {
+                    log.error("Error al consultar estado en pasarela para referencia {}: {}", payment.getReference(), error.getMessage());
+                    return Mono.error(error);
+                });
+    }
+
+    private Payment updatePaymentStatusFromResponse(Payment payment, ExternalPaymentResponseDTO response) {
+        if ("APPROVED".equalsIgnoreCase(response.getStatus())) {
+            payment.approve();
+            log.info("Pago ID: {} aprobado por la pasarela externa", payment.getId());
+        } else if ("REJECTED".equalsIgnoreCase(response.getStatus())) {
+            payment.reject();
+            log.warn("Pago ID: {} rechazado por la pasarela externa", payment.getId());
+        }
+        return payment;
+    }
+}

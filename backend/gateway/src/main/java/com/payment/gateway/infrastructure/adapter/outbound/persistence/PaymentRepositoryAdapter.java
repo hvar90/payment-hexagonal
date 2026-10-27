@@ -6,7 +6,10 @@ import com.payment.gateway.domain.port.outbound.PaymentRepositoryPort;
 import com.payment.gateway.infrastructure.adapter.outbound.persistence.entity.PaymentEntity;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.time.LocalDateTime;
 
 @Component
 @RequiredArgsConstructor
@@ -27,8 +30,13 @@ public class PaymentRepositoryAdapter implements PaymentRepositoryPort {
 
     @Override
     public Mono<Payment> findByReference(String reference) {
-        // Busca en la base de datos y mapea el resultado a un objeto de Dominio
         return repository.findByReference(reference).map(this::toDomain);
+    }
+
+    @Override
+    public Flux<Payment> findByStatusAndCreatedAtBefore(PaymentStatus status, LocalDateTime createdAt) {
+        return repository.findByStatusAndCreatedAtBefore(status.name(), createdAt)
+                .map(this::toDomain);
     }
 
     private PaymentEntity toEntity(Payment payment) {

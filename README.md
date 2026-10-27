@@ -1,5 +1,6 @@
 # Documentación Técnica: Solución Integración Asíncrona con Pasarela de Pagos (`payment-gateway-service`)
 
+
 ---
 
 ## 1. Declaración de Herramientas Utilizadas y Supuestos Realizados
@@ -16,9 +17,10 @@
 ### Supuestos de Diseño Realizados
 
 1. **Supuesto de Concurrencia y Escalabilidad Horizontal:** Se asume que el sistema operará bajo altos volúmenes de tráfico concorrente y múltiples instancias del microservicio desplegadas tras un balanceador de carga. Por esta razón, la idempotencia no se delega en memoria local (`ConcurrentHashMap`), sino a nivel transaccional en PostgreSQL (`UNIQUE INDEX`) para peticiones de creación y mediante tabla de eventos deduplicados (`processed_events`) para Webhooks.
-2. **Supuesto de Observabilidad y Trazabilidad Centralizada:** Para la versión actual del código se manejan logs estructurados con SLF4J/Logback enriquecidos. En un entorno de producción productivo de alta concurrencia (como AWS/GCP), se asume que estos logs estructurados serán ingeridos por un agente ( AWS CloudWatch, Datadog, etc).
-3. **Supuesto sobre el Protocolo del Proveedor Externo:** Se asume que el proveedor externo soporta un modelo híbrido: consumo síncrono mediante REST API para el intento de cobro inicial y confirmación asíncrona diferida vía notificaciones HTTP POST (Webhooks) protegidos por firma HMAC-SHA256 en el encabezado `X-Signature`.
-4. **Supuesto de Tolerancia a Fallos:** Supuesto de Tolerancia a Fallos y Conciliación Periódica (Scheduler)
+2. **Supuesto de Idempotencia en la Creación de Pagos:** Se asume que cada operación de pago utiliza una referencia de comercio (payment.reference) única y estable, reutilizada en los reintentos de una misma solicitud. El servicio consulta si la referencia ya existe y, de ser así, devuelve el pago existente sin volver a ejecutar el cobro. Además, el índice único idx_payments_reference en PostgreSQL evita registrar dos pagos con la misma referencia, incluso ante solicitudes concurrentes.
+3. **Supuesto de Observabilidad y Trazabilidad Centralizada:** Para la versión actual del código se manejan logs estructurados con SLF4J/Logback enriquecidos. En un entorno de producción productivo de alta concurrencia (como AWS/GCP), se asume que estos logs estructurados serán ingeridos por un agente ( AWS CloudWatch, Datadog, etc).
+4. **Supuesto sobre el Protocolo del Proveedor Externo:** Se asume que el proveedor externo soporta un modelo híbrido: consumo síncrono mediante REST API para el intento de cobro inicial y confirmación asíncrona diferida vía notificaciones HTTP POST (Webhooks) protegidos por firma HMAC-SHA256 en el encabezado `X-Signature`.
+5. **Supuesto de Tolerancia a Fallos:** Supuesto de Tolerancia a Fallos y Conciliación Periódica (Scheduler)
 Se asume que la pasarela externa o los consumidores downstream pueden experimentar caídas temporales de minutos u horas, así como escenarios donde la pasarela externa falle definitivamente al entregar una notificación asíncrona (Webhook) o esta se pierda por problemas de red. Para mitigar esto en un entorno productivo de alta disponibilidad, se debe implementar un servicio programado (Scheduler) que consulte activamente los endpoints de consulta de la pasarela para rescatar órdenes huérfanas en estado PENDING y asegurar la consistencia eventual de los datos
 
 ---
