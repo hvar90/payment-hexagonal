@@ -1,6 +1,7 @@
 package com.payment.gateway.infrastructure.adapter.outbound.gateway;
 
 import com.payment.gateway.domain.model.Payment;
+import com.payment.gateway.domain.model.PaymentStatus;
 import com.payment.gateway.domain.port.outbound.ExternalPaymentGatewayPort;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
@@ -58,12 +59,23 @@ public class ExternalPaymentGatewayAdapter implements ExternalPaymentGatewayPort
     }
 
     private Payment updatePaymentStatusFromResponse(Payment payment, ExternalPaymentResponseDTO response) {
-        if ("APPROVED".equalsIgnoreCase(response.getStatus())) {
+        if (response == null || response.getStatus() == null) {
+            payment.updateStatus(PaymentStatus.UNKNOWN);
+            log.warn("Pago ID: {} con respuesta vacía o estado nulo por parte de la pasarela", payment.getId());
+            return payment;
+        }
+
+        String responseStatus = response.getStatus().trim();
+
+        if ("APPROVED".equalsIgnoreCase(responseStatus)) {
             payment.approve();
             log.info("Pago ID: {} aprobado por la pasarela externa", payment.getId());
-        } else if ("REJECTED".equalsIgnoreCase(response.getStatus())) {
+        } else if ("REJECTED".equalsIgnoreCase(responseStatus)) {
             payment.reject();
             log.warn("Pago ID: {} rechazado por la pasarela externa", payment.getId());
+        } else {
+            payment.markAsUnknown();  
+            log.warn("Pago ID: {} con estado desconocido o por confirmar recibido: '{}'", payment.getId(), responseStatus);
         }
         return payment;
     }

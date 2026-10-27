@@ -43,9 +43,16 @@ public class Payment {
         this.updatedAt = LocalDateTime.now();
     }
 
+    public void markAsUnknown() {
+        if (this.status == PaymentStatus.APPROVED || this.status == PaymentStatus.REJECTED) return;
+        this.status = PaymentStatus.UNKNOWN;
+        this.updatedAt = LocalDateTime.now();
+    }
+
     public void updateStatus(PaymentStatus status) {
         if (status == PaymentStatus.APPROVED) approve();
         else if (status == PaymentStatus.REJECTED) reject();
+        else if (status == PaymentStatus.UNKNOWN) markAsUnknown();
         else {
             this.status = status;
             this.updatedAt = LocalDateTime.now();
