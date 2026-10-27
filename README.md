@@ -8,7 +8,7 @@ Microservicio reactivo de alta disponibilidad y tolerancia a fallos para la inte
 
 ##  Declaración de Herramientas y Justificación Tecnológica
 
-* **Java 17 + Spring Boot 3**: Elegido por su robustez, soporte nativo de programación reactiva y rendimiento empresarial optimizado.
+* **Java + Spring Boot 3**: Elegido por su robustez, soporte nativo de programación reactiva y rendimiento empresarial optimizado.
 * **Spring WebFlux (Reactor)**: Permite procesamiento asíncrono y no bloqueante de entrada/salida (`Mono`/`Flux`), esencial para manejar picos masivos de concurrencia de clientes y webhooks sin agotar hilos del sistema.
 * **Spring Data R2DBC + PostgreSQL**: Conexión reactiva nativa a base de datos relacionales. Se justifica para evitar bloqueos de hilos JDBC tradicionales y mantener la consistencia ACID con PostgreSQL.
 * **Flyway**: Herramienta estándar de control de versiones y migraciones automatizadas de bases de datos (`V1__create_payments_table.sql`, `V2__create_processed_events_table.sql`).
