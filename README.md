@@ -383,22 +383,6 @@ sequenceDiagram
 2. **Caso B (Pasarela Externa - Webhook Duplicado):** Si la pasarela reenvía una notificación con un `eventId` que ya fue guardado previamente en `processed_events`, `existsByEventId` retorna `true`. El sistema ignora la actualización de estado, no emite eventos duplicados hacia RabbitMQ y responde HTTP 200 OK a la pasarela para confirmar la recepción sin alterar los datos.
 
 
-
-
-## 7. Selección y Justificación Tecnológica
-
-| Tecnología | Elección Concreta | Justificación Técnica |
-| --- | --- | --- |
-| **Paradigma** | Reactive Programming (WebFlux / Reactor) | Permite manejar miles de conexiones concurrentes con un número reducido de hilos (Event Loop), optimizando el uso de CPU y memoria ante llamadas I/O de red no bloqueantes hacia la pasarela externa. |
-| **Persistencia** | PostgreSQL + R2DBC | Permite mantener consistencia ACID y soporte transaccional relacional sin romper el modelo no bloqueante del Event Loop reactivo (a diferencia de JDBC tradicional que es bloqueante). |
-| **Tolerancia a Fallos** | Resilience4j | Librería reactiva ligera que evita el efecto cascada cuando la pasarela externa presenta degradación o latencia. Permite configurar *Circuit Breaker* para aislar fallos y *Retry* con backoff exponencial.
-|**Mensajería** | RabbitMQ | Garantiza la entrega de eventos (*At-Least-Once delivery*) y el desacoplamiento de la arquitectura. Sus colas durables permiten que las notificaciones no se pierdan ante caídas del sistema.
-
-
-
-
-Para que la documentación quede totalmente robusta y cumpla a cabalidad con la exigencia de la prueba técnica sobre la justificación de herramientas, aquí tienes cómo se integraría la **Sección 7. Selección y Justificación Tecnológica** con su tabla detallada:
-
 ---
 
 ## 7. Selección y Justificación Tecnológica
