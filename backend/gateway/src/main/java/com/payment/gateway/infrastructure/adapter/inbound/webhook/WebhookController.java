@@ -3,7 +3,6 @@ package com.payment.gateway.infrastructure.adapter.inbound.webhook;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.payment.gateway.application.service.PaymentWebhookService;
 import com.payment.gateway.domain.model.Payment;
-import com.payment.gateway.domain.model.PaymentStatus;
 import com.payment.gateway.infrastructure.security.WebhookSignatureValidator;
 
 import lombok.RequiredArgsConstructor;
@@ -32,18 +31,16 @@ public class WebhookController {
     @ResponseStatus(HttpStatus.OK)
     public Mono<Payment> handleWebhook(
             @RequestHeader("X-Signature") String signature,
-            @RequestBody String rawPayload // Recibimos el cuerpo crudo para que la firma coincida exactamente
+            @RequestBody String rawPayload 
     ) {
         log.info("Recibida notificación Webhook con firma para validación de seguridad");
 
-        // 2. Validar la autenticidad e integridad mediante la firma HMAC
         boolean isValid = signatureValidator.isValidSignature(rawPayload, signature);
         if (!isValid) {
             log.warn("¡Intento de webhook fraudulento o firma inválida detectada!");
             return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Firma de webhook inválida"));
         }
 
-        // 3. Convertir el texto plano (JSON) a nuestro DTO usando el ObjectMapper inyectado
         WebhookRequestDTO request;
         try {
             request = objectMapper.readValue(rawPayload, WebhookRequestDTO.class);
@@ -52,10 +49,9 @@ public class WebhookController {
             return Mono.error(new MalformedWebhookPayloadException("Error al parsear el JSON del webhook", e));
         }
 
-        // 4. Continuar con la lógica de negocio de manera reactiva
-        return paymentWebhookService.handleWebhookNotification(request.getPaymentId(), request.getStatus())
+        // Invocamos el servicio pasando el eventId para la idempotencia real
+        return paymentWebhookService.handleWebhookNotification(request.getEventId(), request.getPaymentId(), request.getStatus())
                 .doOnSuccess(updated -> log.info("Webhook procesado correctamente para el pago ID: {}", updated.getId()))
                 .doOnError(error -> log.error("Error procesando webhook: {}", error.getMessage()));
     }
 }
-
