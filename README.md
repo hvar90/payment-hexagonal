@@ -1,293 +1,413 @@
-#  Payment Gateway Integration Service
-
-> 
-
-Microservicio reactivo de alta disponibilidad y tolerancia a fallos para la integración con pasarelas de pago de terceros (estilo Wompi), diseñado bajo los principios de **Arquitectura Hexagonal (Ports and Adapters)**, **Spring WebFlux (R2DBC)** y patrones avanzados de ingeniería de software financiero.
-
----
-
-##  Declaración de Herramientas y Justificación Tecnológica
-
-* **Java + Spring Boot 3**: Elegido por su robustez, soporte nativo de programación reactiva y rendimiento empresarial optimizado.
-* **Spring WebFlux (Reactor)**: Permite procesamiento asíncrono y no bloqueante de entrada/salida (`Mono`/`Flux`), esencial para manejar picos masivos de concurrencia de clientes y webhooks sin agotar hilos del sistema.
-* **Spring Data R2DBC + PostgreSQL**: Conexión reactiva nativa a base de datos relacionales. Se justifica para evitar bloqueos de hilos JDBC tradicionales y mantener la consistencia ACID con PostgreSQL.
-* **Flyway**: Herramienta estándar de control de versiones y migraciones automatizadas de bases de datos (`V1__create_payments_table.sql`, `V2__create_processed_events_table.sql`).
-
-
-* **Resilience4j**: Proveedor de resiliencia modular (`CircuitBreaker` y `Retry`) para aislar fallos de la pasarela de pagos externa.
-
-
-* **Spring AMQP (RabbitMQ)**: Broker de mensajes para desacoplar el procesamiento de eventos de negocio asíncronos posteriores.
-
-
-* **HMAC SHA-256**: Estándar criptográfico para la validación de la autenticidad e integridad de las peticiones webhook firmadas.
-
+# Documentación Técnica: Solución Integración Asíncrona con Pasarela de Pagos (`payment-gateway-service`)
 
 
 ---
 
-##  Supuestos Realizados
+## 1. Declaración de Herramientas Utilizadas y Supuestos Realizados
 
-1. **Concurrencia Masiva e Idempotencia**: Suponiendo que la plataforma puede recibir múltiples reintentos simultáneos de webhooks por fallos de red de la pasarela, se implementó una tabla dedicada (`processed_events`) con el `event_id` como clave primaria en PostgreSQL, evitando condiciones de carrera a nivel de motor de base de datos.
+### Herramientas y Frameworks Utilizados
 
+* **Java / Spring Boot 3+ (Spring WebFlux):** Desarrollo del runtime reactivo no bloqueante.
+* **Spring Data R2DBC / PostgreSQL 15:** Persistencia reactiva con driver asíncrono sobre PostgreSQL.
+* **Flyway:** Gestión de migraciones de estructura DDL de base de datos en el arranque .
+* **Resilience4j:** Implementación de las estrategias reactivas de *Circuit Breaker* y *Retry* con *Exponential Backoff*.
+* **RabbitMQ:** Broker de mensajería orientada a eventos (*Event-Driven Architecture*) para garantizar procesamiento asíncrono desacoplado y resiliencia ante caídas de subsistemas downstream.
+* **HmacSHA256:** Mecanismo criptográfico para firma e integridad de notificaciones tipo Webhook.
+* **Mermaid.js:** Formato unificado para la representación legible de diagramas C4, Modelo Entidad-Relación y Diagramas de Secuencia.
 
-2. **Trazabilidad y Observabilidad**: Se implementó una estrategia inicial basada en logs estructurados con identificadores de correlación (`@Slf4j`). Para un entorno de producción masivo, se asume que estos logs se centralizarán en servicios como AWS CloudWatch o Elasticsearch/Redis para auditoría y análisis forense.
-3. **Disponibilidad de la Pasarela Externa**: Se asume que la pasarela de terceros puede experimentar intermitencias o latencias elevadas, por lo que se implementaron políticas estrictas de reintentos (`Retry`) y circuitos abiertos (`CircuitBreaker`).
+### Supuestos de Diseño Realizados
 
-
-4. **Modelo de Consistencia de Eventos**: Se asume que los eventos de notificación de webhooks pueden llegar desordenados o duplicados, por lo que la máquina de estados del dominio (`Payment`) valida estrictamente las transiciones permitidas (ej. no se puede rechazar un pago ya aprobado).
-
-
+1. **Supuesto de Concurrencia y Escalabilidad Horizontal:** Se asume que el sistema operará bajo altos volúmenes de tráfico concorrente y múltiples instancias del microservicio desplegadas tras un balanceador de carga. Por esta razón, la idempotencia no se delega en memoria local (`ConcurrentHashMap`), sino a nivel transaccional en PostgreSQL (`UNIQUE INDEX`) para peticiones de creación y mediante tabla de eventos deduplicados (`processed_events`) para Webhooks.
+2. **Supuesto de Observabilidad y Trazabilidad Centralizada:** Para la versión actual del código se manejan logs estructurados con SLF4J/Logback enriquecidos. En un entorno de producción productivo de alta concurrencia (como AWS/GCP), se asume que estos logs estructurados serán ingeridos por un agente ( AWS CloudWatch, Datadog, etc).
+3. **Supuesto sobre el Protocolo del Proveedor Externo:** Se asume que el proveedor externo soporta un modelo híbrido: consumo síncrono mediante REST API para el intento de cobro inicial y confirmación asíncrona diferida vía notificaciones HTTP POST (Webhooks) protegidos por firma HMAC-SHA256 en el encabezado `X-Signature`.
+4. **Supuesto de Tolerancia a Fallos:** Supuesto de Tolerancia a Fallos y Conciliación Periódica (Scheduler)
+Se asume que la pasarela externa o los consumidores downstream pueden experimentar caídas temporales de minutos u horas, así como escenarios donde la pasarela externa falle definitivamente al entregar una notificación asíncrona (Webhook) o esta se pierda por problemas de red. Para mitigar esto en un entorno productivo de alta disponibilidad, se debe implementar un servicio programado (Scheduler) que consulte activamente los endpoints de consulta de la pasarela para rescatar órdenes huérfanas en estado PENDING y asegurar la consistencia eventual de los datos
 
 ---
 
-##  1. Arquitectura y Componentes (Arquitectura Hexagonal)
+## 2. Arquitectura de Software y Componentes
 
-El sistema aísla por completo el núcleo de negocio de los adaptadores tecnológicos externos, estructurándose de la siguiente manera:
+El proyecto aplica **Arquitectura Hexagonal (Puertos y Adaptadores)** para aislar la lógica del dominio de las tecnologías de infraestructura (frameworks, bases de datos y colas).
+
+### Diagrama de Arquitectura Hexagonal y Capas
+
+```mermaid
+graph TB
+    subgraph Adaptadores_Entrada["Capas de Infraestructura: Adaptadores de Entrada (Inbound Adapters)"]
+        REST_Ctrl["PaymentController<br/>(REST API)"]
+        WH_Ctrl["WebhookController<br/>(Webhook Listener)"]
+        Consumer["PaymentEventConsumer<br/>(RabbitMQ Consumer)"]
+    end
+
+    subgraph Puertos_Entrada["Capa de Aplicación: Puertos de Entrada (Inbound Ports)"]
+        ProcessUC["ProcessPaymentUseCase<br/>(Interfaz)"]
+    end
+
+    subgraph Capa_Dominio["Capa de Dominio (Domain Core)"]
+        PaymentModel["Payment<br/>(Aggregate / Model)"]
+        PaymentStat["PaymentStatus<br/>(Enum)"]
+        InvalidException["InvalidPaymentStateException<br/>(Domain Exception)"]
+    end
+
+    subgraph Capa_Aplicacion["Capa de Aplicación (Application Services)"]
+        PaymentProcSvc["PaymentProcessService"]
+        PaymentWHSvc["PaymentWebhookService"]
+    end
+
+    subgraph Puertos_Salida["Capa de Aplicación: Puertos de Salida (Outbound Ports)"]
+        PaymentRepoPort["PaymentRepositoryPort<br/>(Interfaz)"]
+        EventRepoPort["EventRepositoryPort<br/>(Interfaz)"]
+        ExtGatewayPort["ExternalPaymentGatewayPort<br/>(Interfaz)"]
+    end
+
+    subgraph Adaptadores_Salida["Capas de Infraestructura: Adaptadores de Salida (Outbound Adapters)"]
+        PaymentRepoAdapter["PaymentRepositoryAdapter"]
+        EventRepoAdapter["EventRepositoryAdapter"]
+        ExtGatewayAdapter["ExternalPaymentGatewayAdapter"]
+        EventProducer["PaymentEventProducer"]
+        SpringDataPayment["SpringDataPaymentRepository"]
+        SpringDataEvent["SpringDataProcessedEventRepository"]
+        WebClientBean["WebClient"]
+        RabbitTemplateBean["RabbitTemplate"]
+        SecurityValidator["WebhookSignatureValidator"]
+    end
+
+    subgraph Componentes_Externos["Infraestructura Externa"]
+        PostgreSQL[("PostgreSQL DB<br/>(R2DBC / Flyway)")]
+        ExtAPI["Pasarela Externa de Pagos<br/>(REST API)"]
+        RabbitMQBroker["RabbitMQ Broker"]
+    end
+
+    %% Relaciones de Capas
+    REST_Ctrl --> ProcessUC
+    WH_Ctrl --> SecurityValidator
+    WH_Ctrl --> PaymentWHSvc
+    
+    PaymentProcSvc -.-> ProcessUC
+    
+    PaymentProcSvc --> PaymentModel
+    PaymentWHSvc --> PaymentModel
+    PaymentModel --> InvalidException
+    PaymentModel --> PaymentStat
+
+    PaymentProcSvc --> PaymentRepoPort
+    PaymentProcSvc --> ExtGatewayPort
+    PaymentProcSvc --> EventProducer
+
+    PaymentWHSvc --> PaymentRepoPort
+    PaymentWHSvc --> EventRepoPort
+    PaymentWHSvc --> EventProducer
+
+    PaymentRepoAdapter -.-> PaymentRepoPort
+    EventRepoAdapter -.-> EventRepoPort
+    ExtGatewayAdapter -.-> ExtGatewayPort
+
+    PaymentRepoAdapter --> SpringDataPayment
+    EventRepoAdapter --> SpringDataEvent
+    ExtGatewayAdapter --> WebClientBean
+    EventProducer --> RabbitTemplateBean
+    Consumer --> RabbitMQBroker
+
+    SpringDataPayment --> PostgreSQL
+    SpringDataEvent --> PostgreSQL
+    WebClientBean --> ExtAPI
+    RabbitTemplateBean --> RabbitMQBroker
 
 ```
-                  [ Inbound Adapters ]
-   (PaymentController, WebhookController, PaymentEventConsumer)
-                         │
-                         ▼
-                [ Inbound Ports ]
-           (ProcessPaymentUseCase, etc.)
-                         │
-                         ▼
-             [ Domain Core / Business ]
-         (Payment, PaymentStatus, Exceptions)
-                         │
-            ┌────────────┴────────────┐
-            ▼                         ▼
-   [ Outbound Ports ]        [ Outbound Ports ]
- (PaymentRepositoryPort)   (EventRepositoryPort, ExternalGateway)
-            │                         │
-            ▼                         ▼
-  [ Outbound Adapters ]     [ Outbound Adapters ]
-(R2DBC / PostgreSQL)      (WebClient / RabbitMQ)
+
+---
+
+## 3. Responsabilidades por Componente y Desglose de Capas
+
+A continuación se detalla la ubicación en la arquitectura hexagonal y la responsabilidad de cada uno de los archivos principales del proyecto:
+
+| Capa Hexagonal | Archivo / Componente | Responsabilidad Técnica Principal |
+| --- | --- | --- |
+| **Dominio** | `Payment.java` | Agregado de Dominio. Contiene el estado del pago, las fechas de creación/actualización y encapsula las reglas de transición de estado (`approve()`, `reject()`, `updateStatus()`). |
+| **Dominio** | `PaymentStatus.java` | Enum de dominio con los estados válidos: `PENDING`, `APPROVED`, `REJECTED`, `FAILED`. |
+| **Dominio** | `InvalidPaymentStateException.java` | Excepción explícita de negocio lanzada si se intenta una transición de estado inválida (ej. rechazar un pago previamente aprobado). |
+| **Aplicación (Inbound Ports)** | `ProcessPaymentUseCase.java` | Interfaz que define el contrato de entrada para la orquestación del flujo de procesamiento de pago. |
+| **Aplicación (Outbound Ports)** | `PaymentRepositoryPort.java` | Contrato para la persistencia y consulta de pagos (`save`, `findById`, `findByReference`). |
+| **Aplicación (Outbound Ports)** | `EventRepositoryPort.java` | Contrato para verificar la existencia de eventos procesados y registrarlos (`existsByEventId`, `saveProcessedEvent`). |
+| **Aplicación (Outbound Ports)** | `ExternalPaymentGatewayPort.java` | Contrato abstracto para el cobro síncrono contra la pasarela externa. |
+| **Aplicación (Services)** | `PaymentProcessService.java` | Orquestador de creación de pagos. Valida la existencia previa por `reference`, guarda el registro en estado `PENDING`, ejecuta la llamada a la pasarela externa y notifica a RabbitMQ de manera asíncrona. |
+| **Aplicación (Services)** | `PaymentWebhookService.java` | Orquestador del webhook. Garantiza la idempotencia mediante la consulta de `eventId` en `processed_events`, actualiza el estado del pago en la BD y publica la actualización en RabbitMQ. |
+| **Infraestructura (Inbound)** | `PaymentController.java` | Adaptador REST controlador HTTP. Mapea la petición recibida a DTO y delega al caso de uso de aplicación. |
+| **Infraestructura (Inbound)** | `WebhookController.java` | Endpoint receptor de notificaciones asíncronas de la pasarela. Invoca la validación de firma y envía el payload a `PaymentWebhookService`. |
+| **Infraestructura (Inbound)** | `PaymentEventConsumer.java` | Consumidor AMQP (`@RabbitListener`) que procesa los eventos publicados en la cola de RabbitMQ. |
+| **Infraestructura (Security)** | `WebhookSignatureValidator.java` | Componente criptográfico que recalcula la firma HMAC-SHA256 usando el payload crudo y la clave secreta compartida para validar contra la cabecera `X-Signature`. |
+| **Infraestructura (Outbound)** | `ExternalPaymentGatewayAdapter.java` | Adaptador HTTP reactivo (`WebClient`). Integra la pasarela externa aplicando Resiliencia reactiva con Resilience4j (*Circuit Breaker* y *Retry*). |
+| **Infraestructura (Outbound)** | `PaymentRepositoryAdapter.java` | Adaptador de persistencia. Mapea la entidad de dominio `Payment` a la entidad R2DBC `PaymentEntity` y delega en Spring Data. |
+| **Infraestructura (Outbound)** | `EventRepositoryAdapter.java` | Adaptador de persistencia para el registro y auditoría de eventos de webhook procesados (`ProcessedEventEntity`). |
+| **Infraestructura (Outbound)** | `PaymentEventProducer.java` | Adaptador de mensajería que usa `RabbitTemplate` para emitir eventos en JSON hacia el Topic Exchange de RabbitMQ. |
+| **Infraestructura (Config/Persistence)** | `application.yml`, `V1...sql`, `V2...sql` | Configuraciones de R2DBC, Resilience4j y scripts Flyway con tablas e índices únicos y compuestos. |
+
+---
+
+## 4. Modelo de Datos y Optimización de Índices
+
+### Diagrama Entidad-Relación (Mermaid)
+
+```mermaid
+erDiagram
+    PAYMENTS {
+        VARCHAR(255) id PK
+        VARCHAR(255) reference UK
+        NUMERIC(19_2) amount
+        VARCHAR(3) currency
+        VARCHAR(50) status
+        VARCHAR(255) description
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+
+    PROCESSED_EVENTS {
+        VARCHAR(255) event_id PK
+        VARCHAR(255) payment_id FK
+        VARCHAR(100) event_type
+        VARCHAR(50) status
+        TIMESTAMP processed_at
+    }
+
+    PAYMENTS ||--o{ PROCESSED_EVENTS : "recibe notificaciones"
 
 ```
 
-###  Responsabilidades por Componente y Capas
+### Justificación de los Índices de Base de Datos
 
-* **Capa de Dominio (`com.payment.gateway.domain`)**:
-* `Payment.java`: Entidad de dominio pura que encapsula las reglas de negocio y la máquina de estados de las transacciones (`approve()`, `reject()`, etc.).
-
-
-* `PaymentStatus.java`: Enumeración con los estados del ciclo de vida (`PENDING`, `APPROVED`, `REJECTED`, `FAILED`).
+1. `idx_payments_reference` **(Unique Index en `payments.reference`):**
+* **Propósito:** Cada transacción financiera está asociada a un código de referencia interno generado por el comercio.
+* **Justificación:** Previene a nivel de motor de base de datos la creación de dos transacciones paralelas con la misma referencia en situaciones de peticiones HTTP duplicadas o reintentos del cliente, garantizando la consistencia ante condiciones de carrera.
 
 
-* `InvalidPaymentStateException.java`: Excepción controlada ante violaciones de transición de estados.
+2. `idx_payments_status_created` **(Compound Index en `payments(status, created_at)`):**
+* **Propósito:** Soporta consultas eficientes orientadas a conciliación o tareas batch programadas.
+* **Justificación:** Consultas del estilo *"Obtener pagos en estado PENDING creados hace más de 2 horas"* son ejecutadas frecuentemente por procesos de fondo. Este índice evita un escaneo secuencial masivo de la tabla (*Sequential Scan*), optimizando las I/O de la base de datos.
 
 
-* *Puertos (Ports)*:
-* `ProcessPaymentUseCase.java`: Puerto de entrada para el caso de uso de pagos.
-
-
-* `PaymentRepositoryPort.java` & `EventRepositoryPort.java`: Puertos de salida que definen contratos de persistencia agnósticos a la base de datos.
-
-
-
-
-
-
-* **Capa de Aplicación (`com.payment.gateway.application.service`)**:
-* `PaymentProcessService.java`: Orquesta el flujo completo de creación, cobro externo, actualización y emisión de eventos de un pago.
-
-
-* `PaymentWebhookService.java`: Controla la lógica de idempotencia por eventos y la aplicación segura de cambios de estado notificados por webhooks.
-
-
-
-
-* **Capa de Infraestructura (`com.payment.gateway.infrastructure`)**:
-* *Adaptadores de Entrada (Inbound / Driving)*:
-* `PaymentController.java`: Expone la API REST HTTP para iniciar solicitudes de pago.
-
-
-* `WebhookController.java`: Recibe notificaciones asíncronas de la pasarela.
-
-
-* `PaymentEventConsumer.java`: Escucha mensajes asíncronos desde la cola de RabbitMQ.
-
-
-* `WebhookSignatureValidator.java`: Valida la firma HMAC SHA-256 de los webhooks utilizando el payload crudo.
-
-
-
-
-* *Adaptadores de Salida (Outbound / Driven)*:
-* `ExternalPaymentGatewayAdapter.java`: Cliente reactivo (`WebClient`) protegido con Resilience4j (`CircuitBreaker` y `Retry`).
-
-
-* `PaymentRepositoryAdapter.java` & `EventRepositoryAdapter.java`: Adaptadores que conectan el dominio con Spring Data R2DBC.
-
-
-* `PaymentEventProducer.java`: Publica eventos de pago hacia el broker RabbitMQ.
-
-
-
-
-* *Configuraciones y Persistencia*:
-* Entidades de base de datos (`PaymentEntity.java`, `ProcessedEventEntity.java`).
-
-
-* Migraciones Flyway (`V1__create_payments_table.sql`, `V2__create_processed_events_table.sql`).
-
-
-* Configuraciones de red, seguridad y mensajería (`RabbitMQConfig.java`, `WebClientConfig.java`, `application.yml`).
-
-
-
-
+3. `idx_processed_events_payment` **y** `idx_processed_events_type_date` **en `processed_events`:**
+* **Propósito:** Indexación de la tabla de auditoría de notificaciones recibidas.
+* **Justificación:** Permiten auditorías instantáneas sobre la frecuencia y timestamps de notificaciones enviadas por la pasarela para un mismo pago. Facilitan la resolución de disputas transaccionales y la trazabilidad operativa.
 
 
 
 ---
 
-##  2. Diagramas de Secuencia
+## 5. Idempotencia y Resiliencia en Detalle
 
-### A. Flujo Exitoso (Creación y Procesamiento de Pago)
+En la integración con pasarelas de pago conviven dos entornos con responsabilidades e identidades independientes: el **Cliente/Comercio** que genera la orden y la **Pasarela Externa** que procesa y notifica la transacción.
+
+### Resumen de Mecanismos de Idempotencia
+
+| Mecanismo | Nivel de Capa | Actor Origen | Problema Específico que Previene |
+| --- | --- | --- | --- |
+| **`reference` + Unique Index** | `PaymentProcessService` / PostgreSQL DB | Cliente o Comercio | Evita que un doble clic en la interfaz de usuario o un reintento de red cree **dos órdenes o cobros distintos** para una misma compra. |
+| **`event_id` + Tabla `processed_events**` | `PaymentWebhookService` / PostgreSQL DB | Pasarela Externa | Evita que un reintento del Webhook por fallos en el ACK del protocolo HTTP altere dos veces el estado del pago o genere eventos duplicados en la cola. |
+
+---
+
+### Explicación del Mecanismo de Firma de Seguridad en Webhooks
+
+Las notificaciones de webhooks están expuestas en un endpoint público. Para evitar que terceros maliciosos envíen peticiones falsas para marcar un pago como `APPROVED`, se implementa `WebhookSignatureValidator`:
+
+1. La pasarela comparte una clave secreta (`payment.gateway.webhook.secret-key`).
+2. Al enviar la notificación, la pasarela firma el payload JSON usando el algoritmo **HMAC-SHA256** y lo adjunta en el encabezado HTTP `X-Signature`.
+3. El controlador `WebhookController` recibe el payload *raw* sin modificar y la firma enviada.
+4. `WebhookSignatureValidator` recalcula la firma criptográfica localmente en base al secreto y al payload raw recibido.
+5. Si la firma calculada no coincide exactamente byte a byte con la firma recibida, la solicitud se rechaza inmediatamente con una excepción de seguridad, impidiendo la manipulación o falsificación de estados.
+
+---
+
+### Política de Reintentos, Circuit Breaker y Garantías con RabbitMQ
+
+#### 1. Tolerancia a Fallos en Llamadas Salientes (`ExternalPaymentGatewayAdapter`)
+
+* **Retry con Exponential Backoff:** Configurado mediante Resilience4j para tolerar caídas o parpadeos de red transitorios (`TimeoutException`, `ServiceUnavailable`, `GatewayTimeout`). Realiza un máximo de 3 intentos espaciados exponencialmente (2s, 4s), impidiendo saturar a la pasarela externa.
+* **Circuit Breaker:** Monitorea una ventana deslizante de las últimas 10 peticiones. Si el 50% o más de las llamadas fallan o tardan más de 3 segundos, el circuito pasa a estado `OPEN` durante 10 segundos. Durante este período, las peticiones fallan rápido (*fail-fast*), desviándose al flujo de fallback y evitando la acumulación excesiva de hilos o recursos reactivos retenidos.
+
+#### 2. Procesamiento Asíncrono Resiliente con RabbitMQ
+
+* **Desacoplamiento:** Cuando el estado de un pago cambia en `PaymentProcessService` o `PaymentWebhookService`, se publica un evento en RabbitMQ en un hilo elástico no bloqueante.
+* **Persistencia y Resiliencia:** La cola `payment.webhook.queue` está configurada como durable (`durable = true`). Si los microservicios downstream (notificaciones, conciliación, contabilidad) se encuentran fuera de línea o sufren fallos, RabbitMQ retiene de forma persistente los mensajes. Una vez que los servicios se restablecen, el consumidor (`PaymentEventConsumer`) procesa automáticamente todos los mensajes acumulados, garantizando consistencia eventual y entrega de información sin pérdidas.
+
+---
+
+## 6. Diagramas de Secuencia
+
+### Diagrama 1: Flujo Exitoso Completo (Creación y Procesamiento de Webhook)
+
+Este diagrama abarca el ciclo de vida completo: la creación del pago por parte del cliente, la comunicación síncrona con la pasarela y la confirmación posterior por Webhook.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Client
-    participant API as PaymentController
-    participant Serv as PaymentProcessService
-    participant PayRepo as PaymentRepositoryAdapter
-    participant DB as PostgreSQL (R2DBC)
-    participant GW as ExternalPaymentGatewayAdapter
-    participant Broker as PaymentEventProducer
+    actor Cliente as Cliente / Comercio
+    participant PC as PaymentController
+    participant PPS as PaymentProcessService
+    participant PRAdapter as PaymentRepositoryAdapter
+    participant DB as PostgreSQL DB
+    participant EPAdapter as ExternalPaymentGatewayAdapter
+    participant Pasarela as Pasarela Externa
+    participant Producer as PaymentEventProducer
+    participant Rabbit as RabbitMQ Broker
 
-    Client->>API: POST /api/v1/payments (PaymentRequestDTO)
-    API->>Serv: processPayment(Payment)
-    Serv->>PayRepo: save(Payment [PENDING])
-    PayRepo->>DB: INSERT INTO payments
-    DB-->>PayRepo: PaymentEntity guardada
-    PayRepo-->>Serv: Retorna Payment de dominio
-    
-    Serv->>GW: charge(Payment) [WebClient + Resilience4j]
-    GW-->>Serv: ExternalPaymentResponseDTO [APPROVED]
-    Serv->>Serv: payment.approve()
-    
-    Serv->>PayRepo: save(Payment [APPROVED])
-    PayRepo->>DB: UPDATE payments SET status = APPROVED
-    DB-->>PayRepo: Actualizado
-    PayRepo-->>Serv: Retorna Payment actualizado
-    
-    Serv->>Broker: sendPaymentEvent(paymentId, APPROVED) [RabbitMQ]
-    Broker-->>Serv: Mensaje encolado
-    Serv-->>API: Retorna Payment finalizado
-    API-->>Client: 201 CREATED
+    %% Fase 1: Creación
+    Cliente->>PC: POST /api/v1/payments (PaymentRequestDTO)
+    PC->>PPS: processPayment(payment)
+    PPS->>PRAdapter: findByReference(reference)
+    PRAdapter->>DB: SELECT * FROM payments WHERE reference = ?
+    DB-->>PRAdapter: Empty
+    PRAdapter-->>PPS: Mono.empty()
+
+    PPS->>PRAdapter: save(payment)
+    PRAdapter->>DB: INSERT INTO payments (status='PENDING')
+    DB-->>PRAdapter: PaymentEntity
+    PRAdapter-->>PPS: Payment (PENDING)
+
+    PPS->>EPAdapter: charge(payment)
+    EPAdapter->>Pasarela: POST /charges (WebClient)
+    Pasarela-->>EPAdapter: 200 OK (APPROVED)
+    EPAdapter-->>PPS: Payment (APPROVED)
+
+    PPS->>PRAdapter: save(payment)
+    PRAdapter->>DB: UPDATE payments SET status='APPROVED'
+    DB-->>PRAdapter: PaymentEntity
+    PRAdapter-->>PPS: Payment (APPROVED)
+
+    PPS->>Producer: sendPaymentEvent(paymentId, APPROVED)
+    Producer->>Rabbit: Publish Event (payment.exchange)
+    PPS-->>PC: Payment (APPROVED)
+    PC-->>Cliente: 201 Created (Payment JSON)
+
+    %% Fase 2: Webhook Asíncrono
+    note over Pasarela, WC: Tiempo después (Notificación Asíncrona)
+    participant WC as WebhookController
+    participant Sec as WebhookSignatureValidator
+    participant PWS as PaymentWebhookService
+    participant ERAdapter as EventRepositoryAdapter
+
+    Pasarela->>WC: POST /api/webhooks (Header: X-Signature, Body: WebhookRequestDTO)
+    WC->>Sec: isValidSignature(rawPayload, signature)
+    Sec-->>WC: true
+
+    WC->>PWS: handleWebhookNotification(eventId, paymentId, eventType, newStatus)
+    PWS->>ERAdapter: existsByEventId(eventId)
+    ERAdapter->>DB: SELECT exists FROM processed_events WHERE event_id = ?
+    DB-->>ERAdapter: false
+    ERAdapter-->>PWS: false
+
+    PWS->>PRAdapter: findById(paymentId)
+    PRAdapter->>DB: SELECT * FROM payments WHERE id = ?
+    DB-->>PRAdapter: PaymentEntity
+    PRAdapter-->>PWS: Payment
+
+    PWS->>PWS: payment.approve() / updateStatus()
+    PWS->>PRAdapter: save(payment)
+    PRAdapter->>DB: UPDATE payments
+    DB-->>PRAdapter: PaymentEntity
+
+    PWS->>ERAdapter: saveProcessedEvent(eventId, paymentId, eventType, status)
+    ERAdapter->>DB: INSERT INTO processed_events
+    DB-->>ERAdapter: Success
+
+    PWS->>Producer: sendPaymentEvent(paymentId, status)
+    Producer->>Rabbit: Publish Event
+    PWS-->>WC: Payment
+    WC-->>Pasarela: 200 OK
 
 ```
 
-**Explicación en texto del Flujo Exitoso:**
-El cliente realiza una petición HTTP POST al `PaymentController`. Este invoca al servicio de aplicación `PaymentProcessService`, el cual persiste el pago en estado `PENDING` utilizando el adaptador de repositorio reactivo R2DBC. A continuación, se invoca de forma no bloqueante a la pasarela externa mediante `ExternalPaymentGatewayAdapter` (protegido por Resilience4j). Si la pasarela responde con estado aprobado, el modelo de dominio actualiza su estado interno y se vuelve a persistir en la base de datos. Finalmente, se emite un evento asíncrono al broker RabbitMQ mediante `PaymentEventProducer` y se responde exitosamente al cliente.
+#### Explicación del Diagrama 1:
+
+1. El cliente envía la solicitud REST. Se verifica mediante `findByReference` que la orden no haya sido registrada previamente.
+2. Se guarda la orden en estado `PENDING` y se delega el cobro al puerto `ExternalPaymentGatewayPort`.
+3. `ExternalPaymentGatewayAdapter` realiza el llamado HTTP a la pasarela externa de forma no bloqueante.
+4. Al recibir confirmación, actualiza el estado en la base de datos y publica un evento en RabbitMQ.
+5. Cuando la pasarela remite el Webhook de actualización, `WebhookController` valida la cabecera HMAC `X-Signature`.
+6. `PaymentWebhookService` comprueba que el `eventId` no exista en `processed_events` (garantizando idempotencia), persiste el evento y notifica a los suscriptores a través de RabbitMQ.
 
 ---
 
-### B. Flujo de Recepción de Webhook con Control de Idempotencia y Reintentos
+### Diagrama 2: Manejo de Excepciones (Idempotencia en Webhook Duplicado y Intento de Pago Repetido)
+
+Este diagrama ilustra las dos barreras de seguridad ante peticiones duplicadas provenientes del cliente (reintento de creación) o de la pasarela (webhook duplicado).
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant GW as Pasarela Externa
-    participant Hook as WebhookController
-    participant Val as WebhookSignatureValidator
-    participant Serv as PaymentWebhookService
-    participant EventRepo as EventRepositoryAdapter
-    participant PayRepo as PaymentRepositoryAdapter
-    participant Broker as PaymentEventProducer
+    actor Cliente as Cliente / Comercio
+    participant PC as PaymentController
+    participant PPS as PaymentProcessService
+    participant PRAdapter as PaymentRepositoryAdapter
+    participant DB as PostgreSQL DB
+    
+    %% Caso A: Duplicidad en Creación
+    note over Cliente, DB: Caso A: Reintento de pago con misma reference (Doble Clic)
+    Cliente->>PC: POST /api/v1/payments (reference: REF-100)
+    PC->>PPS: processPayment(payment)
+    PPS->>PRAdapter: findByReference("REF-100")
+    PRAdapter->>DB: SELECT * FROM payments WHERE reference = 'REF-100'
+    DB-->>PRAdapter: PaymentEntity (PAGO EXISTENTE)
+    PRAdapter-->>PPS: Mono.just(ExistingPayment)
+    note over PPS: Detecta duplicado y retorna pago previo sin ir a la pasarela
+    PPS-->>PC: Existing Payment
+    PC-->>Cliente: 201 Created (Payment Existente sin duplicar cobro)
 
-    GW->>Hook: POST /api/v1/payments/webhook (X-Signature, rawPayload)
-    Hook->>Val: isValidSignature(rawPayload, signature) [HMAC SHA-256]
-    Val-->>Hook: true (Firma Válida)
-    
-    Hook->>Serv: handleWebhookNotification(eventId, paymentId, APPROVED)
-    Serv->>EventRepo: existsByEventId(eventId)
-    EventRepo-->>Serv: false (El evento es completamente nuevo)
-    
-    Serv->>PayRepo: findById(paymentId)
-    PayRepo-->>Serv: Objeto Payment encontrado
-    Serv->>Serv: payment.approve()
-    
-    Serv->>PayRepo: save(payment)
-    PayRepo-->>DB: Actualiza estado del pago
-    
-    Serv->>EventRepo: saveProcessedEvent(eventId, paymentId, status)
-    EventRepo-->>DB: INSERT INTO processed_events (PRIMARY KEY event_id)
-    
-    Serv->>Broker: sendPaymentEvent(paymentId, APPROVED) [RabbitMQ]
-    Serv-->>Hook: Retorna Payment procesado
-    Hook-->>GW: 200 OK
+    %% Caso B: Webhook Duplicado
+    note over Pasarela, DB: Caso B: Reenvío de Webhook con mismo event_id (Reintento de Red)
+    participant Pasarela as Pasarela Externa
+    participant WC as WebhookController
+    participant PWS as PaymentWebhookService
+    participant ERAdapter as EventRepositoryAdapter
 
-    Note over GW,Hook: --- Reintento automático por fallo de red de la pasarela ---
-
-    GW->>Hook: POST /api/v1/payments/webhook (Mismo eventId repetido)
-    Hook->>Val: isValidSignature(...)
-    Val-->>Hook: true
-    Hook->>Serv: handleWebhookNotification(eventId, paymentId, APPROVED)
+    Pasarela->>WC: POST /api/webhooks (eventId: EVT-999)
+    WC->>PWS: handleWebhookNotification(eventId: EVT-999, ...)
+    PWS->>ERAdapter: existsByEventId("EVT-999")
+    ERAdapter->>DB: SELECT exists FROM processed_events WHERE event_id = 'EVT-999'
+    DB-->>ERAdapter: true (EVENTO YA PROCESADO)
+    ERAdapter-->>PWS: true
     
-    Serv->>EventRepo: existsByEventId(eventId)
-    EventRepo-->>Serv: true (¡El evento ya fue procesado anteriormente!)
-    
-    Note over Serv: Se omite la lógica de negocio y se descarta el duplicado
-    Serv-->>Hook: Retorna pago actual sin alterar estado ni reenviar eventos
-    Hook-->>GW: 200 OK (Duplicado ignorado con éxito)
+    PWS->>PRAdapter: findById(paymentId)
+    PRAdapter->>DB: SELECT * FROM payments WHERE id = ?
+    DB-->>PRAdapter: PaymentEntity
+    PRAdapter-->>PWS: Payment (Sin modificar estado)
+    note over PWS: Se ignora la actualización duplicada y se retorna estado actual
+    PWS-->>WC: Payment Actual
+    WC-->>Pasarela: 200 OK
 
 ```
 
-**Explicación en texto del Flujo de Webhook e Idempotencia:**
-La pasarela externa envía una notificación HTTP POST al `WebhookController`. El sistema valida la integridad y autenticidad del mensaje evaluando la firma criptográfica HMAC SHA-256 con el cuerpo crudo mediante `WebhookSignatureValidator`. Si la firma es inválida, rechaza la petición con un error `401 Unauthorized`. De lo contrario, el servicio `PaymentWebhookService` consulta la tabla exclusiva de idempotencia a través de `EventRepositoryAdapter` utilizando el `event_id`. Si el evento ya existe (`existsByEventId == true`), la notificación duplicada se descarta de inmediato sin alterar los datos financieros ni duplicar eventos en RabbitMQ. Si el evento es nuevo, se procesa la actualización del pago, se registra el `event_id` en la base de datos de forma atómica y se emite el evento de confirmación.
+#### Explicación del Diagrama 2:
+
+1. **Caso A (Cliente - Doble Clic):** Al recibir una solicitud con una referencia ya registrada (`reference`), la consulta `findByReference` rescata la entidad existente. El servicio retorna el pago actual de forma idempotente sin invocar la pasarela externa ni realizar duplicaciones de saldo.
+2. **Caso B (Pasarela Externa - Webhook Duplicado):** Si la pasarela reenvía una notificación con un `eventId` que ya fue guardado previamente en `processed_events`, `existsByEventId` retorna `true`. El sistema ignora la actualización de estado, no emite eventos duplicados hacia RabbitMQ y responde HTTP 200 OK a la pasarela para confirmar la recepción sin alterar los datos.
+
+
+
+
+## 7. Selección y Justificación Tecnológica
+
+| Tecnología | Elección Concreta | Justificación Técnica |
+| --- | --- | --- |
+| **Paradigma** | Reactive Programming (WebFlux / Reactor) | Permite manejar miles de conexiones concurrentes con un número reducido de hilos (Event Loop), optimizando el uso de CPU y memoria ante llamadas I/O de red no bloqueantes hacia la pasarela externa. |
+| **Persistencia** | PostgreSQL + R2DBC | Permite mantener consistencia ACID y soporte transaccional relacional sin romper el modelo no bloqueante del Event Loop reactivo (a diferencia de JDBC tradicional que es bloqueante). |
+| **Tolerancia a Fallos** | Resilience4j | Librería reactiva ligera que evita el efecto cascada cuando la pasarela externa presenta degradación o latencia. Permite configurar *Circuit Breaker* para aislar fallos y *Retry* con backoff exponencial.
+|**Mensajería** | RabbitMQ | Garantiza la entrega de eventos (*At-Least-Once delivery*) y el desacoplamiento de la arquitectura. Sus colas durables permiten que las notificaciones no se pierdan ante caídas del sistema.
+
+
+
+
+Para que la documentación quede totalmente robusta y cumpla a cabalidad con la exigencia de la prueba técnica sobre la justificación de herramientas, aquí tienes cómo se integraría la **Sección 7. Selección y Justificación Tecnológica** con su tabla detallada:
 
 ---
 
-##  3. Modelo de Datos y Esquema Relacional
+## 7. Selección y Justificación Tecnológica
 
-La persistencia se divide en dos tablas relacionales gestionadas mediante migraciones automatizadas de **Flyway** (`V1` y `V2`):
-
-### 1. Tabla `payments`
-
-Almacena el estado actual y los detalles comerciales de cada orden o intento de pago.
-
-* `id` (`VARCHAR(255)`, **PK**): Identificador único del pago.
-
-
-* `amount` (`NUMERIC(19, 2)`, `NOT NULL`): Monto monetario de la transacción.
-
-
-* `currency` (`VARCHAR(3)`, `NOT NULL`): Código de moneda ISO (ej. COP, USD).
-
-
-* `status` (`VARCHAR(50)`, `NOT NULL`): Estado actual del pago (`PENDING`, `APPROVED`, `REJECTED`, `FAILED`).
-
-
-* `description` (`VARCHAR(255)`): Descripción o concepto de la transacción.
-
-
-* `created_at` (`TIMESTAMP`, `NOT NULL`): Marca de tiempo exacta de creación.
-
-
-* **Índices**: `idx_payments_status` sobre la columna `status` para optimizar consultas de conciliación.
-
-
-
-### 2. Tabla `processed_events`
-
-Tabla exclusiva dedicada estrictamente al control de **Idempotency Keys** (basada en el modelo de Wompi / Stripe).
-
-* `event_id` (`VARCHAR(255)`, **PK**): Identificador único del evento notificado por el webhook (Idempotency Key). Al ser clave primaria, previene físicamente condiciones de carrera (*race conditions*) ante reintentos concurrentes.
-
-
-* `payment_id` (`VARCHAR(255)`, `NOT NULL`): Referencia lógica al pago asociado.
-
-
-* `status` (`VARCHAR(50)`, `NOT NULL`): Estado que aplicó dicho evento.
-
-
-* `processed_at` (`TIMESTAMP`, `NOT NULL`): Fecha y hora de recepción y procesamiento.
-
-
-* **Índices**: `idx_processed_events_payment` sobre la columna `payment_id` para trazabilidad rápida.
+| Tecnología | Elección concreta | Justificación técnica |
+|---|---|---|
+| **Runtime y framework** | Java / Spring Boot 3+ (Spring WebFlux) | Permite construir una arquitectura reactiva y no bloqueante sobre Netty. Es adecuado para aplicaciones de pasarelas de pago que manejan múltiples conexiones concurrentes y operaciones de I/O de red, como las llamadas a pasarelas externas. Puede reducir la necesidad de hilos en espera frente a un modelo tradicional bloqueante, siempre que se utilicen componentes no bloqueantes de extremo a extremo. |
+| **Persistencia asíncrona** | Spring Data R2DBC / PostgreSQL 15 | R2DBC proporciona acceso reactivo y no bloqueante a PostgreSQL. Evita que las consultas a la base de datos bloqueen los hilos que gestionan el flujo reactivo, manteniendo la reactividad desde el controlador hasta la persistencia. |
+| **Migraciones de base de datos** | Flyway | Permite versionar y controlar los cambios del esquema de la base de datos, incluidas tablas, restricciones e índices únicos o compuestos. Puede ejecutar las migraciones automáticamente durante el arranque de la aplicación mediante JDBC, sin requerir que las operaciones de negocio utilicen JDBC. |
+| **Resiliencia y tolerancia a fallos** | Resilience4j | Proporciona mecanismos como Circuit Breaker y Retry, con integración para Reactor mediante operadores como `CircuitBreakerOperator` y `RetryOperator`. Permite aislar fallos temporales de la pasarela externa y configurar reintentos con *exponential backoff*. Los reintentos deben limitarse a operaciones que puedan repetirse de forma segura, utilizando idempotencia para evitar cobros duplicados. |
+| **Broker de mensajería** | RabbitMQ | Implementa un modelo de mensajería asíncrona que desacopla los componentes mediante eventos. Con una configuración adecuada de colas durables, mensajes persistentes y confirmaciones de publicación y consumo, permite implementar una estrategia de entrega *At-Least-Once*. Los consumidores deben ser idempotentes para gestionar posibles entregas duplicadas y recuperarse de fallos temporales. |
+| **Seguridad e integridad** | HMAC-SHA256 | Permite verificar la autenticidad e integridad de los webhooks mediante una firma calculada con una clave secreta compartida. La aplicación compara la firma recibida con la calculada sobre el contenido de la solicitud, siguiendo el mecanismo definido por la pasarela. Para evitar ataques de repetición, también debe validar la marca de tiempo o el identificador del evento cuando el proveedor lo admita. |
