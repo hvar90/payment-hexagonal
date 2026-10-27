@@ -68,3 +68,15 @@ logging:
     root: INFO
     org.springframework.r2dbc: DEBUG
     com.payment.gateway: DEBUG
+
+# ==========================================
+# Configuración de Observabilidad (Actuator)
+# ==========================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, metrics, info
+  endpoint:
+    health:
+      show-details: always
