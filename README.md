@@ -1,10 +1,8 @@
 #  Payment Gateway Integration Service
 
-> **Nota:** A pesar de que la documentación de la prueba técnica solicitaba explicaciones arquitectónicas y documentación en texto, se ha decidido desarrollar, estruturar y subir el código fuente completo implementando la solución en el repositorio público de GitHub: [https://github.com/hvar90/payment-hexagonal](https://github.com/hvar90/payment-hexagonal).
-> 
-> 
 
-Microservicio reactivo de alta disponibilidad y tolerancia a fallos para la integración con pasarelas de pago de terceros (estilo Wompi), diseñado bajo los principios de **Arquitectura Hexagonal (Ports and Adapters)**, **Spring WebFlux (R2DBC)** y patrones avanzados de ingeniería de software financiero.
+
+Microservicio reactivo de alta disponibilidad y tolerancia a fallos para la integración con pasarelas de pago de terceros, diseñado bajo los principios de **Arquitectura Hexagonal (Ports and Adapters)**, **Spring WebFlux (R2DBC)** y patrones avanzados de ingeniería de software financiero.
 
 ---
 
